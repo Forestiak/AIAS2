@@ -66,25 +66,19 @@ def create_neuron_hook(neuron_index: int, steering_coefficient: float):
         return value
     return neuron_hook
 
-def generate_with_neuron_steering(
-    model: HookedTransformer,
-    prompt: str,
-    neuron_index: int,
-    steering_coefficient: float = 1.0,
-    max_new_tokens: int = 50
-):
+def generate_with_neuron_steering(model: HookedTransformer, prompt: str, neuron_index: int, steering_coefficient: float = 1.0, max_new_tokens: int = 50):
     
-    analyze_prompt(model, prompt) #the modified probabilities
     
     """Generate text with modified neuron behavior"""
     hook_fn = create_neuron_hook(neuron_index, steering_coefficient)
     
-    with model.hooks(fwd_hooks=[('blocks.20.hook_mlp_out', hook_fn)]):
-        output = model.generate(
-            prompt,
-            max_new_tokens=max_new_tokens,
-            **GENERATE_KWARGS
-        )
+    with model.hooks(fwd_hooks=[('blocks.20.hook_mlp_out', hook_fn)]): #here it only looks at the 20th layer 'aka' output
+        # FIRST: Analyze modified probabilities
+        print("\n=== Modified Probabilities ===")
+        modified_cache = analyze_prompt(model, prompt)
+        
+        # THEN: Generate text with same modification
+        output = model.generate(prompt, max_new_tokens=max_new_tokens, **GENERATE_KWARGS)
     
     return output
 
@@ -93,10 +87,10 @@ def main():
     # Initialize components
     model, sae = load_model_and_sae()
     
-    # Example prompt (modify as needed)
+    # prompt - from the Welch Labs video
     prompt = "The reliability of Wikipedia is very"
     
-    # Analyze baseline response
+    # baseline response
     print("\n=== Baseline Analysis ===")
     cache = analyze_prompt(model, prompt)
     
@@ -110,22 +104,17 @@ def main():
     #    "First Attention Layer Output"
     #)
     
-    # Example neuron manipulation (modify index/coefficient as needed)
-    NEURON_INDEX = 1393  # Hypothetical safety-related neuron
+    NEURON_INDEX = 1393
     STEERING_COEFFICIENT = -10.0
     
     print(f"\nSteering neuron {NEURON_INDEX} with coefficient {STEERING_COEFFICIENT}")
     
     # Generate with modified neuron behavior
-    modified_output = generate_with_neuron_steering(
-        model,
-        prompt,
-        NEURON_INDEX,
-        STEERING_COEFFICIENT
-    )
+    modified_output = generate_with_neuron_steering(model, prompt, NEURON_INDEX, STEERING_COEFFICIENT)
     
     print("\nModified Output:")
     print(modified_output)
+
 
 if __name__ == "__main__":
     main()
