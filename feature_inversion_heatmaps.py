@@ -172,16 +172,58 @@ def prompt_conditioned_similarity(vision_feat, text_emb, device):
     )
     return sim
 
-# ——————————————————————————————
-# 2. Main
-# ——————————————————————————————
+def generate_caption_for_image(
+    img_path: str,
+    prompt: str = "Describe the image.",
+    model_components: tuple | None = None,
+    device: str = "cuda",
+    max_new_tokens: int = 75,
+) -> str:
+    """
+    Return a caption for *img_path* with Eagle-2-2B.
+    Relies on the official `.chat()` helper so we do **not**
+    have to worry about dimensionality-matching.
+    """
+    # 1) Tokenizer – we can reuse the one we already loaded
+    if model_components is None:
+        _, _, tok = load_models(device)
+    else:
+        _, _, tok = model_components
+
+    # 2) Full multimodal wrapper (fast, weights are already in GPU RAM)
+    mm = AutoModel.from_pretrained(
+        "nvidia/Eagle2-2B",
+        torch_dtype=torch.float16,
+        trust_remote_code=True
+    ).eval().to(device)
+
+    # 3) Pre-process the picture with the helper you already have
+    img_tensor, _ = preprocess_image(img_path, device)      # [1, 3, 448, 448]
+
+    # 4) Let the model do its thing
+    gen_cfg = dict(
+        max_new_tokens=max_new_tokens,
+        do_sample=False,
+        temperature=0.7
+    )
+    caption = mm.chat(
+        tokenizer        = tok,
+        pixel_values     = img_tensor,
+        question         = prompt,
+        generation_config= gen_cfg
+    )
+
+    return caption.strip()
+
+
 
 if __name__=="__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('--image', required=True, help='Input image path')
     parser.add_argument('--output_dir', default='outputs_plant', help='Results dir')
-    parser.add_argument('--prompt', default='Describe me the plant located on the right of the image', help='Text prompt')
+    parser.add_argument('--prompt', required=True, help='Text prompt')
     parser.add_argument('--threshold', type=float, default=0.6, help='Heatmap threshold (0-1)')
+    parser.add_argument('--caption', action='store_true', help='Also generate text caption for the image')
     args = parser.parse_args()
 
     os.makedirs(args.output_dir, exist_ok=True)
@@ -203,19 +245,18 @@ if __name__=="__main__":
         text_emb = text_output.logits.mean(dim=1)
     else:
         raise ValueError("Could not extract text embeddings")
-
+    
     # Get vision hidden states for all layers
     with torch.no_grad():
         vision_output = vit(
             pixel_values=img_t,
             output_hidden_states=True,
-            return_dict=True
+            return_dict=True,
         )
-    
     hidden_states = vision_output.hidden_states
     
     # Generate prompt-conditioned heatmaps for each layer
-    for layer_idx in range(1, len(hidden_states)):
+    '''for layer_idx in range(1, len(hidden_states)):
         print(f"Processing layer {layer_idx-1}")
         
         # Get vision features for this layer
@@ -231,7 +272,6 @@ if __name__=="__main__":
         # Normalize and reshape
         sim_np = similarity.cpu().numpy()
         sim_np = (sim_np - sim_np.min()) / (sim_np.max() - sim_np.min() + 1e-8)
-        
         # Calculate grid size (assuming square grid)
         g = int(np.sqrt(len(sim_np)))
         grid = sim_np.reshape(g, g)
@@ -244,5 +284,17 @@ if __name__=="__main__":
             color=(0, 255, 0),
             threshold=args.threshold
         )
+    '''
+    # After generating heatmaps, also generate a caption if requested
+    if args.caption:
+        print("\nGenerating caption for the image...")
+        caption = generate_caption_for_image(args.image, args.prompt, (vit, txt, tok), device)
+        print(f"\nModel response:\n{caption}")
+        
+        # Save caption to a text file
+        #caption_path = os.path.join(args.output_dir, "caption.txt")
+        #with open(caption_path, "w") as f:
+        #    f.write(caption)
+        #print(f"Caption saved to {caption_path}")
     
     print(f'Done. Outputs in {args.output_dir}')
